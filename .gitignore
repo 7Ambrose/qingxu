@@ -12,8 +12,6 @@ dist/
 *.lnk
 *.pending*
 *.before-merge-*
-今日日程/状态.json
-今日日程/错误.txt
-今日日程/启动错误.txt
-今日日程/启动青序.exe
 *.inspect.ndjson
+**/bin/
+**/obj/

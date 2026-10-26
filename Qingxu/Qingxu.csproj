@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>青序</AssemblyName>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
+    <StartupObject>Qingxu.Program</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+    <EmbeddedResource Include="icon.ico" LogicalName="Qingxu.icon.ico" />
+  </ItemGroup>
+</Project>
