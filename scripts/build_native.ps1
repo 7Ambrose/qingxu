@@ -1,4 +1,4 @@
-﻿param([switch]$Test, [switch]$Publish, [string]$Version = '0.1.0')
+﻿param([switch]$Test, [switch]$Publish, [string]$Version = '0.2.0')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
