@@ -44,6 +44,7 @@ public sealed class MainWindow : Window
     private Dictionary<string, AbsorbRecord> absorbed = new();
     private (Point Origin, FrameworkElement Host, AgendaItem Item)? rowDrag;
     private (Point Origin, AgendaItem Item)? clickPending;
+    private (string Id, DateTime At)? lastClick;
     private bool exitRequested;
     private bool syncing;
     public bool IsSyncing => syncing;
@@ -172,6 +173,9 @@ public sealed class MainWindow : Window
             var source = eventArgs.OriginalSource as DependencyObject ?? eventArgs.Source as DependencyObject;
             if (source is null || Hit(source) is not { } target) return;
             var origin = eventArgs.GetPosition(this);
+            // 双击必须在按下时判定：抬起事件的 ClickCount 不可靠，第二次会被当成普通单击翻回去
+            var repeated = RepeatedClick(target.Item.Id, eventArgs.ClickCount, DateTime.UtcNow);
+            if (target.Head && repeated) { HandleCheck(target.Item, true); return; }
             if (target.Head) clickPending = (origin, target.Item);
             if (target.Item.Editable && !target.Item.Class) rowDrag = (origin, target.Host, target.Item);
         };
@@ -181,7 +185,7 @@ public sealed class MainWindow : Window
             var position = eventArgs.GetPosition(this);
             if (rowDrag is { } drag && Far(position, drag.Origin))
             {
-                rowDrag = null; clickPending = null;
+                rowDrag = null; clickPending = null; lastClick = null;
                 DragDrop.DoDragDrop(drag.Host, new DataObject("QingxuTask", drag.Item), DragDropEffects.Move);
                 return;
             }
@@ -192,8 +196,7 @@ public sealed class MainWindow : Window
             rowDrag = null;
             if (clickPending is not { } click) return;
             clickPending = null;
-            if (eventArgs.ClickCount >= 2) HandleCheck(click.Item, true);
-            else HandleCheck(click.Item, false);
+            HandleCheck(click.Item, false);
         };
         Closing += OnClosing;
         Closed += (_, _) => { dayTimer.Stop(); watchTimer.Stop(); restoreWait?.Unregister(null); tray.Visible = false; tray.Dispose(); trayImage.Dispose(); trayMenu.Dispose(); };
@@ -406,6 +409,13 @@ public sealed class MainWindow : Window
         }
         return null;
     }
+    /// <summary>同一条上的第二次按下算双击：系统 ClickCount 或双击间隔内都认。</summary>
+    public bool RepeatedClick(string id, int clickCount, DateTime now)
+    {
+        var repeated = clickCount >= 2 || (lastClick is { } last && last.Id == id && (now - last.At).TotalMilliseconds <= Forms.SystemInformation.DoubleClickTime);
+        lastClick = (id, now);
+        return repeated;
+    }
     private static DependencyObject? Parent(DependencyObject node) => node is Visual || node is System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
     private static bool Far(Point position, Point origin) => Math.Abs(position.X - origin.X) >= SystemParameters.MinimumHorizontalDragDistance || Math.Abs(position.Y - origin.Y) >= SystemParameters.MinimumVerticalDragDistance;
     private sealed record HeadParts(Grid Head, TextBlock Label, Border Box, System.Windows.Shapes.Path Tick, System.Windows.Shapes.Path Slash);
@@ -514,7 +524,7 @@ public sealed class MainWindow : Window
     }
     /// <summary>点击复选框的完整链路（不等待双击间隔），供快捷键与自动化测试使用。</summary>
     public void ToggleItem(AgendaItem item) { HandleCheck(item, false); CommitPendingCheck(); }
-    private void HandleCheck(AgendaItem item, bool doubleClick)    {
+    public void HandleCheck(AgendaItem item, bool doubleClick)    {
         if (doubleClick)
         {
             // 双击：丢弃单击排队的那一次勾选，直接标记未完成

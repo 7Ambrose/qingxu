@@ -321,6 +321,19 @@ internal static class NativeTests
         var beforeUndo = window.Store.Day(today).Schedule.Count;
         inlineUndo!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); window.UpdateLayout();
         Assert(window.Store.Day(today).Schedule.Count == beforeUndo - 1, "Inline unschedule did not clear the time");
+        // 双击标记未完成：判定放在按下时做（抬起事件的 ClickCount 不可靠）
+        var now = DateTime.UtcNow;
+        Assert(!window.RepeatedClick("local:double", 1, now), "First click was treated as a double click");
+        Assert(window.RepeatedClick("local:double", 1, now.AddMilliseconds(120)), "Second click inside the double-click interval was not detected");
+        Assert(!window.RepeatedClick("local:double", 1, now.AddSeconds(3)), "A click after the interval was still treated as a double click");
+        Assert(window.RepeatedClick("local:other", 2, now.AddSeconds(9)), "System ClickCount 2 was not honoured");
+        var doubleTarget = window.Store.Day(today).Tasks.First(item => item.Editable);
+        window.HandleCheck(doubleTarget, true);
+        var afterDouble = window.Store.Day(today).Tasks.Single(item => item.Id == doubleTarget.Id);
+        Assert(afterDouble.Incomplete && !afterDouble.Done, "Double click did not mark the task incomplete");
+        window.ToggleItem(afterDouble);
+        var afterSingle = window.Store.Day(today).Tasks.Single(item => item.Id == doubleTarget.Id);
+        Assert(afterSingle.Done && !afterSingle.Incomplete, "Single click did not bring the task back from incomplete");
         // 整条任务都能抓：日程条和待办卡片都挂上任务，作为拖动的抓取目标
         var headTarget = window.Store.Day(today).Tasks.First(item => item.Editable);
         Assert(Descendants<Border>(window).Any(border => border.Tag is AgendaItem tagged && tagged.Id == headTarget.Id && border.AllowDrop), "Todo card is not marked as a drag source");
