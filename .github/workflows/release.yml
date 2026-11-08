@@ -1,0 +1,52 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'native-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（不带 v，例如 0.2.0）'
+        required: true
+        default: '0.2.0'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^native-v', '' } else { '${{ inputs.version }}' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=native-v$version" >> $env:GITHUB_OUTPUT
+
+      - name: 构建并打包
+        shell: pwsh
+        run: ./scripts/build_native.ps1 -Publish -Version ${{ steps.ver.outputs.version }}
+
+      - name: 发布到 Releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.ver.outputs.tag }}'
+          $version = '${{ steps.ver.outputs.version }}'
+          $zip = "dist/Qingxu-Native-v$version-win-x64.zip"
+          if (-not (Test-Path $zip)) { throw "没有生成 $zip" }
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag $zip --clobber
+          } else {
+            gh release create $tag $zip --title "青序 v$version（C# 原生版）" --notes "自包含单文件，解压即用。Windows 10/11 x64，无需安装 .NET。`n`n- 日程是一条可拖到具体时刻的时间流`n- 行内撤销时间排期与课内任务并入`n- 期中/期末/小测在日程中高亮`n`n详见仓库 README。" --repo $env:GITHUB_REPOSITORY
+          }
