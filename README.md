@@ -2,18 +2,15 @@
 
 Windows 桌面日程小窗，单文件免安装。用 .NET 10 / WPF 写成，**运行时不启动 Python、Node 或 PowerShell**，也不需要 `@oai/artifact-tool` 或其他第三方包。
 
-本仓库用分支区分两套实现：
+**发布的就是这个版本**：`main` 分支（默认）与 [Releases](https://github.com/7Ambrose/qingxu/releases) 里的 `Qingxu-Native-*-win-x64.zip` 都是 C# 原生版。
 
-| 分支 | 实现 | 运行依赖 |
-|---|---|---|
-| `main` | 原有 PowerShell + WPF 版 | Windows PowerShell 5.1、Python 3、Node.js（写回 Excel 需要 `@oai/artifact-tool`） |
-| **`native`（当前分支）** | C# / .NET 10 原生版 | 无，自包含单文件 |
-
-两套实现读写**同一份 Excel**、共用同一套单元格约定和同一个单实例锁，所以不能同时开两个窗口编辑同一个工作簿。日常使用选一套即可。
+- `native` 是原生版的开发线，与 `main` 保持一致。
+- `powershell` 是早期的 PowerShell + WPF 实现（tag `powershell-v0.1.0`），只作存档、不再更新；它需要 Windows PowerShell 5.1、Python 3、Node.js，日常使用不必再看。
+- 两套实现读写**同一份 Excel**、共用同一套单元格约定和同一个单实例锁，所以不能同时开两个窗口编辑同一个工作簿。
 
 ## 下载与运行
 
-1. 到 [Releases](https://github.com/7Ambrose/qingxu/releases) 下载 `Qingxu-Native-v0.1.0-win-x64.zip`，完整解压。
+1. 到 [Releases](https://github.com/7Ambrose/qingxu/releases) 下载最新的 `Qingxu-Native-*-win-x64.zip`，完整解压。
 2. 把 `计划模板.xlsx` 复制到解压目录下的 `outputs\study-plan\计划.xlsx`，再填写自己的课程和任务。
 3. 双击 `青序.exe`。首次启动会自动在上级目录寻找 `outputs\study-plan\计划.xlsx`。
 4. 想放桌面：双击 `创建桌面快捷方式（原生版）.ps1`，或右键 `青序.exe` → 发送到 → 桌面快捷方式。
@@ -42,8 +39,12 @@ Windows 桌面日程小窗，单文件免安装。用 .NET 10 / WPF 写成，**�
 
 **排期与编辑**
 
-- 拖动 `⠿` 在同一天待办或同周清单内排序
-- 拖到时间点排进半小时网格，自动检查与课程冲突
+- **日程是一条时间流**：固定课程和自己的安排按时间混排在同一条竖轴上；没有安排的空档压成一行「空 1 小时 30 分」，6:00 到第一件事、最后一件事到 24:00 也能排
+- **拖到哪一刻就排到哪一刻**：拖到空档上会展开成刻度的尺子并显示落点时间，松手即按该时刻排期；落点撞上已有条目就把后面的依次往后推，推不动 24:00 时改放当天最近的空档
+- **拖到课程上就是课内任务**：待办拖进课程条目的「课内任务」格子，写进「课内安排」的课内任务列
+- 整条任务都能按住拖（右侧按钮和底边调整时长的手柄除外），拖到滚动区上下边缘会自动滚动；单击仍然只是勾选
+- 拉卡片底边改时长，5 分钟一档；行内 `↺` 撤销时间排期或撤销并入的课内任务
+- **考试强调**：顶部列出三周内的期中／期末／小测（带「N 天后」），当天撞上考试的条目整条标红
 - 周任务可拖到所属周的其他日期；日程页「撤」只取消安排，本周页「删」才删任务
 
 **同步**
@@ -69,10 +70,10 @@ Windows 桌面日程小窗，单文件免安装。用 .NET 10 / WPF 写成，**�
 powershell -NoProfile -File scripts/build_native.ps1 -Test
 
 # 构建自包含单文件并打包
-powershell -NoProfile -File scripts/build_native.ps1 -Publish -Version 0.1.0
+powershell -NoProfile -File scripts/build_native.ps1 -Publish -Version 0.2.0
 ```
 
-回归测试共 43 项断言，覆盖工作簿保真（其他 zip 条目哈希不变）、日志恢复、周任务取消安排、日期边界、并发锁、冲突核对、旧版队列导入和界面。断言里引用了具体的课程行和周任务行，所以要拿一份已填好内容的工作簿跑；只用空白模板复现不了。
+回归测试共 109 项断言，覆盖工作簿保真（其他 zip 条目哈希不变）、日志恢复、周任务取消安排、日期边界、并发锁、冲突核对、旧版队列导入和界面。断言里引用了具体的课程行和周任务行，所以要拿一份已填好内容的工作簿跑；只用空白模板复现不了。
 
 诊断：`青序.exe --book "副本路径" --smoke-test "报告.json"` 会保存界面截图，暖机后采样 10 秒 CPU / 内存并自动退出。只用于副本。
 
