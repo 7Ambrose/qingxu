@@ -94,14 +94,14 @@ public static class WorkbookSync
                 columns = new() { ["title"] = "B", ["done"] = "E", ["highlight"] = "I", ["scheduleDate"] = "J", ["start"] = "K", ["planned"] = "L", ["order"] = "M" }; break;
             case "semester":
                 sheet = "学期总清单"; row = int.Parse(parts[1], CultureInfo.InvariantCulture);
-                columns = new() { ["title"] = "A", ["done"] = "B", ["highlight"] = "G" }; break;
+                columns = new() { ["title"] = "A", ["done"] = "B", ["highlight"] = "G", ["order"] = "H", ["scheduleDate"] = "D" }; break;
             case "habit":
                 sheet = parts[1]; row = int.Parse(parts[3], CultureInfo.InvariantCulture);
                 if (parts[2].Length != 1 || parts[2][0] < 'B' || parts[2][0] > 'H' || row != 67 && row != 68) throw new InvalidOperationException("每日项目位置无效。");
                 columns = new[] { "title", "done", "highlight", "start", "planned", "order" }.ToDictionary(key => key, _ => parts[2]); break;
             default: throw new InvalidOperationException("不支持的任务类型。");
         }
-        if (row < 5 || row > 599 || type == "weekly" && (row < 50 || row > 62)) throw new InvalidOperationException("任务位置无效。");
+        if (row < 5 || row > 599 || type == "weekly" && (row < 50 || row > 66)) throw new InvalidOperationException("任务位置无效。");
         if (AgendaRules.Flag(fields, "delete"))
         {
             if (type == "habit")
@@ -111,7 +111,7 @@ public static class WorkbookSync
             }
             else
             {
-                var clearColumns = type switch { "class" => new[] { "F", "G", "H", "I", "J", "M" }, "weekly" => "BCDEFGHIJKLM".Select(character => character.ToString()).ToArray(), "semester" => new[] { "A", "B", "D", "G" }, _ => "ABCDEFGHIJKL".Select(character => character.ToString()).ToArray() };
+                var clearColumns = type switch { "class" => new[] { "F", "G", "H", "I", "J", "M" }, "weekly" => "BCDEFGHIJKLM".Select(character => character.ToString()).ToArray(), "semester" => "ABCDEFGH".Select(character => character.ToString()).ToArray(), _ => "ABCDEFGHIJKL".Select(character => character.ToString()).ToArray() };
                 foreach (var column in clearColumns) book.Set(sheet, column + row, null);
             }
             return;
@@ -139,8 +139,8 @@ public static class WorkbookSync
                     if (value is double duration && (!double.IsFinite(duration) || duration < 0 || duration > 1440)) throw new InvalidOperationException("分钟须在0—1440之间。"); break;
                 case "scheduleDate":
                     value = string.IsNullOrEmpty(value as string) ? null : AgendaReader.Serial(AgendaRules.ParseDate((string)value!));
-                    if (value is int assigned && (book.Number(sheet, "B5") is not double weekStart || assigned < weekStart || assigned > weekStart + 6)) throw new InvalidOperationException("周任务只能安排在所属周内。");
-                    book.Set(sheet, "F" + row, null);
+                    if (value is int assigned && type == "weekly" && (book.Number(sheet, "B5") is not double weekStart || assigned < weekStart || assigned > weekStart + 6)) throw new InvalidOperationException("周任务只能安排在所属周内。");
+                    if (type == "weekly") book.Set(sheet, "F" + row, null);
                     break;
             }
             book.Set(sheet, column + targetRow, value);

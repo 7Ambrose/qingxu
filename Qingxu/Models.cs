@@ -19,6 +19,11 @@ public sealed class AgendaItem
     public string PlannedDate { get; set; } = "";
     public string WeekStart { get; set; } = "";
     public string Subject { get; set; } = "";
+    /// <summary>「日程事项」B 列的分类：小测 / 期中 / 期末 / 志愿…</summary>
+    public string Category { get; set; } = "";
+    /// <summary>「日程事项」F 列的备注，或课程撞上考试时的考试名。</summary>
+    public string Note { get; set; } = "";
+    public bool Exam => AgendaRules.IsExam(Category, Title, TaskTitle, Note);
     public double? Planned { get; set; }
     public double? Actual { get; set; }
     public double Order { get; set; }
@@ -26,12 +31,15 @@ public sealed class AgendaItem
     public bool Incomplete { get; set; }
     public bool Highlight { get; set; }
     public bool Weekly => Id.StartsWith("weekly:", StringComparison.Ordinal);
+    public bool Semester => Id.StartsWith("semester:", StringComparison.Ordinal);
     public bool Class => Id.StartsWith("class:", StringComparison.Ordinal);
     public bool Editable => Id.Length > 0;
     public string DisplayTitle => Class ? TaskTitle : Title;
     public AgendaItem Copy() => (AgendaItem)MemberwiseClone();
     public string Detail => Start.Length > 0 ? Start + "—" + AgendaRules.EndTime(Start, Planned ?? 60)
-        : Weekly ? PlannedDate.Length > 0 ? "安排：" + PlannedDate : "本周未安排" : "";
+        : Weekly ? PlannedDate.Length > 0 ? "安排：" + PlannedDate : "本周未安排"
+        : Semester ? PlannedDate.Length > 0 ? "计划：" + AgendaRules.ShortDate(PlannedDate) : "未安排日期"
+        : "";
 }
 
 public sealed class AgendaDay
@@ -42,7 +50,10 @@ public sealed class AgendaDay
     public List<AgendaItem> Schedule { get; set; } = new();
     public List<AgendaItem> Tasks { get; set; } = new();
     public List<AgendaItem> Weekly { get; set; } = new();
+    public List<AgendaItem> Semester { get; set; } = new();
     public List<AgendaItem> WeekCourses { get; set; } = new();
+    /// <summary>往后三周内的大考，用于日程页顶部的倒计时。</summary>
+    public List<AgendaItem> Exams { get; set; } = new();
 }
 
 public sealed class PendingOperation
@@ -68,6 +79,8 @@ public static class AgendaRules
     public static DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeBySystemTimeZoneId(DateTime.UtcNow, "China Standard Time"));
     public static DateOnly ParseDate(string text) => DateOnly.ParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture);
     public static string DateText(DateOnly date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    public static string ShortDate(string text) => DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+        ? date.ToString("M月d日", CultureInfo.GetCultureInfo("zh-CN")) : text;
     public static void CheckDate(string date)
     {
         var parsed = ParseDate(date);
@@ -75,12 +88,45 @@ public static class AgendaRules
     }
     public static int Minutes(string time, bool midnight = false)
     {
-        if (midnight && time == "24:00") return 1440;
-        if (!TimeOnly.TryParseExact(time, new[] { "H:mm", "HH:mm" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
-            throw new InvalidOperationException("时间请填写 HH:mm，例如 13:30。");
+        var normalized = NormalizeTime(time);
+        if (midnight && normalized == "24:00") return 1440;
+        if (!TimeOnly.TryParseExact(normalized, new[] { "H:mm", "HH:mm" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+            throw new InvalidOperationException("时间请填写 HH:mm，例如 13:30（中文冒号、全角数字都能识别）。");
         return parsed.Hour * 60 + parsed.Minute;
     }
+    /// <summary>把中文冒号、全角数字和空格统一成半角，免得输入法状态不同就填不进去。</summary>
+    public static string NormalizeTime(string time)
+    {
+        var builder = new System.Text.StringBuilder(time.Length);
+        foreach (var character in time)
+        {
+            switch (character)
+            {
+                case '：' or '﹕' or '︓': builder.Append(':'); break;
+                case >= '０' and <= '９': builder.Append((char)('0' + (character - '０'))); break;
+                case ' ' or '　' or '\t': break;
+                default: builder.Append(character); break;
+            }
+        }
+        return builder.ToString();
+    }
     public static string MinuteText(int minutes) => $"{minutes / 60:00}:{minutes % 60:00}";
+    /// <summary>「日程事项」B 列里直接就是考试的类型。</summary>
+    private static readonly string[] ExamCategories = { "小测", "期中", "期末", "考试", "大考", "统考" };
+    private static readonly string[] ExamWords = { "期中", "期末", "小测", "测验", "考试", "机考", "统考", "补考", "随堂测" };
+    /// <summary>考试判定：分类命中直接算；标题命中关键词，但「复习/准备/预习」这类备考任务不算。</summary>
+    public static bool IsExam(string category, params string[] titles)
+    {
+        if (Array.IndexOf(ExamCategories, category) >= 0) return true;
+        foreach (var title in titles)
+        {
+            if (title.Length == 0 || title.Contains("复习") || title.Contains("准备") || title.Contains("预习") || title.Contains("报名")) continue;
+            foreach (var word in ExamWords) if (title.Contains(word)) return true;
+        }
+        return false;
+    }
+    /// <summary>把分钟说成人话：90 → 1 小时 30 分。</summary>
+    public static string Human(int minutes) => minutes < 60 ? minutes + " 分钟" : minutes % 60 == 0 ? minutes / 60 + " 小时" : minutes / 60 + " 小时 " + minutes % 60 + " 分";
     public static string EndTime(string start, double duration) => MinuteText(Minutes(start) + (int)Math.Max(1, duration));
     public static string Text(JsonObject fields, string name) => fields[name]?.ToString() ?? "";
     public static double? Number(JsonObject fields, string name) => double.TryParse(Text(fields, name), NumberStyles.Float, CultureInfo.InvariantCulture, out var number) ? number : null;
@@ -106,6 +152,7 @@ public static class AgendaRules
             var week = ParseDate(item.WeekStart);
             if (assigned < week || assigned > week.AddDays(6)) throw new InvalidOperationException("周任务只能安排在所属周内。");
         }
+        if (item.Semester && Text(fields, "scheduleDate").Length > 0) CheckDate(Text(fields, "scheduleDate"));
     }
     public static void Apply(AgendaItem item, JsonObject fields)
     {

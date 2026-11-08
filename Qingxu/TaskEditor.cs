@@ -31,6 +31,13 @@ public sealed class TaskEditor : Window
             if (item.PlannedDate.Length > 0) date.SelectedDate = AgendaRules.ParseDate(item.PlannedDate).ToDateTime(TimeOnly.MinValue);
             panel.Children.Add(date);
         }
+        else if (item.Semester)
+        {
+            panel.Children.Add(new TextBlock { Text = "计划完成日期（清空表示暂不安排，安排后会出现在当天的待办里）", Margin = new Thickness(0, 10, 0, 4), TextWrapping = TextWrapping.Wrap });
+            date = new DatePicker { DisplayDateStart = AgendaRules.FirstDate.ToDateTime(TimeOnly.MinValue), DisplayDateEnd = AgendaRules.LastDate.ToDateTime(TimeOnly.MinValue) };
+            if (item.PlannedDate.Length > 0) date.SelectedDate = AgendaRules.ParseDate(item.PlannedDate).ToDateTime(TimeOnly.MinValue);
+            panel.Children.Add(date);
+        }
         if (item.Class || item.Id.StartsWith("daily:") || item.Id.StartsWith("local:"))
         {
             if (item.Class) minutes = Field(panel, "预计时长（分钟，选填）", item.Planned?.ToString(CultureInfo.InvariantCulture) ?? "");

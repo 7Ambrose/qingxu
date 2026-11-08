@@ -85,6 +85,8 @@ public static class Program
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
+            var rootBook = Path.Combine(directory.FullName, "计划.xlsx");
+            if (File.Exists(rootBook)) return rootBook;
             var path = Path.Combine(directory.FullName, "outputs", "study-plan", "计划.xlsx");
             if (File.Exists(path)) return path;
             directory = directory.Parent;

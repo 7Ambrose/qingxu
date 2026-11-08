@@ -56,14 +56,33 @@ public static class AgendaReader
                 result.WeekCourses.Add(new AgendaItem { Id = "class:" + row, Date = SerialDate(courseSerial), Title = book.Text("课内安排", "C" + row), Kind = "class",
                     Time = Time(book.Number("课内安排", "D" + row)) + "—" + Time(book.Number("课内安排", "E" + row)) });
         }
-        if (hasWeek && date.DayOfWeek == DayOfWeek.Thursday) result.Schedule.Add(new AgendaItem { Date = day, Title = "部门例会", Time = "21:30—22:30" });
+        if (hasWeek && date.DayOfWeek == DayOfWeek.Thursday
+            && date != new DateOnly(2026, 11, 5) && date != new DateOnly(2026, 11, 12))
+            result.Schedule.Add(new AgendaItem { Date = day, Title = "部门例会", Time = "21:30—22:30" });
         for (var row = 5; row < 200; row++)
         {
-            if (book.Number("日程事项", "A" + row) != serial) continue;
+            if (book.Number("日程事项", "A" + row) is not double rowSerial) continue;
+            var rowDate = SerialDate(rowSerial);
+            if (rowDate.Length == 0) continue;
+            var title = book.Text("日程事项", "E" + row);
+            var category = book.Text("日程事项", "B" + row);
+            var note = book.Text("日程事项", "F" + row);
             var span = Time(book.Number("日程事项", "C" + row)) + "—" + Time(book.Number("日程事项", "D" + row));
-            var existing = result.Schedule.FirstOrDefault(item => item.Time == span);
-            if (existing is not null) existing.Title = book.Text("日程事项", "E" + row);
-            else result.Schedule.Add(new AgendaItem { Date = day, Title = book.Text("日程事项", "E" + row), Time = span, Kind = "event" });
+            if (rowSerial == serial)
+            {
+                var existing = result.Schedule.FirstOrDefault(item => item.Time == span);
+                if (existing is null) result.Schedule.Add(new AgendaItem { Date = day, Title = title, Time = span, Kind = "event", Category = category, Note = note });
+                else if (existing.Class)
+                {
+                    // 考试撞在课程时段里：保留课程名，把考试名和备注挂上去
+                    existing.Category = category;
+                    existing.Note = title + (note.Length > 0 ? " · " + note : "");
+                }
+                else { existing.Title = title; existing.Category = category; existing.Note = note; }
+            }
+            if (AgendaRules.IsExam(category, title) && DateOnly.TryParseExact(rowDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var examDate)
+                && examDate >= date && examDate <= date.AddDays(21) && result.Exams.All(entry => entry.Date != rowDate || entry.Title != title))
+                result.Exams.Add(new AgendaItem { Date = rowDate, Title = title, Category = category, Time = span.Length > 2 ? span : "" });
         }
         for (var row = 15; row < 600; row++)
         {
@@ -72,7 +91,7 @@ public static class AgendaReader
                 Planned = book.Number("学习记录", "E" + row), Actual = book.Number("学习记录", "F" + row), Start = Time(book.Number("学习记录", "L" + row)),
                 Done = book.Text("学习记录", "G" + row).Contains("已完成"), Incomplete = book.Text("学习记录", "G" + row).Contains("未完成"), Highlight = book.Text("学习记录", "K" + row) == "强调", Order = book.Number("学习记录", "B" + row) ?? row });
         }
-        for (var row = 50; row < 63; row++)
+        for (var row = 50; row < 67; row++)
         {
             var title = book.Text(week, "B" + row);
             if (title.Length == 0) continue;
@@ -83,10 +102,19 @@ public static class AgendaReader
             result.Weekly.Add(item);
             if (item.PlannedDate == day) Add(result, item.Copy());
         }
-        for (var row = 5; row < 8; row++)
-            if (book.Number("学期总清单", "D" + row) == serial && book.Text("学期总清单", "A" + row).Length > 0)
-                Add(result, new AgendaItem { Id = "semester:" + row, Date = day, Title = book.Text("学期总清单", "A" + row),
-                    Done = book.Text("学期总清单", "B" + row).Contains("已完成"), Incomplete = book.Text("学期总清单", "B" + row).Contains("未完成"), Highlight = book.Text("学期总清单", "G" + row) == "强调" });
+        for (var row = 5; row < 600; row++)
+        {
+            if (book.Text("学期总清单", "A" + row).Length == 0) continue;
+            var item = new AgendaItem { Id = "semester:" + row, Date = AgendaRules.DateText(AgendaRules.FirstDate), Title = book.Text("学期总清单", "A" + row),
+                PlannedDate = SerialDate(book.Number("学期总清单", "D" + row)), Order = book.Number("学期总清单", "H" + row) ?? row,
+                Done = book.Text("学期总清单", "B" + row).Contains("已完成"), Incomplete = book.Text("学期总清单", "B" + row).Contains("未完成"), Highlight = book.Text("学期总清单", "G" + row) == "强调" };
+            result.Semester.Add(item);
+            if (item.PlannedDate == day) Add(result, item.Copy());
+            // 学期清单里的「机考」等大考也要在日程页提前提醒
+            if (item.Exam && DateOnly.TryParseExact(item.PlannedDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var examDate)
+                && examDate >= date && examDate <= date.AddDays(21) && result.Exams.All(entry => entry.Date != item.PlannedDate || entry.Title != item.Title))
+                result.Exams.Add(new AgendaItem { Date = item.PlannedDate, Title = item.Title, Category = "考试" });
+        }
         Sort(result);
         return result;
     }
@@ -101,6 +129,8 @@ public static class AgendaReader
         day.Schedule = day.Schedule.OrderBy(item => item.Time.Length == 0 ? "99:99" : item.Time, StringComparer.Ordinal).ToList();
         day.Tasks = day.Tasks.OrderBy(item => item.Order).ToList();
         day.Weekly = day.Weekly.OrderBy(item => item.Order).ToList();
+        day.Semester = day.Semester.OrderBy(item => item.Order).ToList();
         day.WeekCourses = day.WeekCourses.OrderBy(item => item.Date).ThenBy(item => item.Time).ToList();
+        day.Exams = day.Exams.OrderBy(item => item.Date, StringComparer.Ordinal).ToList();
     }
 }

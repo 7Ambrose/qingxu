@@ -64,19 +64,25 @@ public sealed class AgendaStore
         foreach (var operation in State.Operations)
         {
             var isWeekly = operation.Id.StartsWith("weekly:");
-            if (isWeekly && operation.Id.Split(':')[1] != result.WeekName || !isWeekly && operation.Date != result.Date) continue;
-            var item = result.Schedule.Concat(result.Tasks).Concat(result.Weekly).FirstOrDefault(candidate => candidate.Id == operation.Id)?.Copy();
+            var isSemester = operation.Id.StartsWith("semester:");
+            if (isWeekly && operation.Id.Split(':')[1] != result.WeekName || !isWeekly && !isSemester && operation.Date != result.Date) continue;
+            var item = result.Schedule.Concat(result.Tasks).Concat(result.Weekly).Concat(result.Semester).FirstOrDefault(candidate => candidate.Id == operation.Id)?.Copy();
             if (item is null && operation.Id.StartsWith("local:")) item = new AgendaItem { Id = operation.Id, Date = operation.Date };
             if (item is null) continue;
             result.Schedule.RemoveAll(candidate => candidate.Id == operation.Id); result.Tasks.RemoveAll(candidate => candidate.Id == operation.Id);
             if (AgendaRules.Flag(operation.Fields, "delete"))
             {
                 if (item.Class) { item.TaskTitle = ""; item.Done = false; item.Highlight = false; item.Planned = null; item.Actual = null; result.Schedule.Add(item); }
-                else result.Weekly.RemoveAll(candidate => candidate.Id == operation.Id);
+                else { result.Weekly.RemoveAll(candidate => candidate.Id == operation.Id); result.Semester.RemoveAll(candidate => candidate.Id == operation.Id); }
                 continue;
             }
             AgendaRules.Apply(item, operation.Fields);
-            if (isWeekly)
+            if (isSemester)
+            {
+                result.Semester.RemoveAll(candidate => candidate.Id == operation.Id); result.Semester.Add(item.Copy());
+                if (item.PlannedDate == result.Date) AgendaReader.Add(result, item);
+            }
+            else if (isWeekly)
             {
                 result.Weekly.RemoveAll(candidate => candidate.Id == operation.Id); result.Weekly.Add(item.Copy());
                 if (item.PlannedDate == result.Date) AgendaReader.Add(result, item);
@@ -89,7 +95,7 @@ public sealed class AgendaStore
     public void Save(AgendaItem item, JsonObject fields)
     {
         AgendaRules.Validate(item, fields);
-        var date = item.Weekly ? item.WeekStart : item.Date;
+        var date = item.Semester ? AgendaRules.DateText(AgendaRules.FirstDate) : item.Weekly ? item.WeekStart : item.Date;
         var copy = State.Operations.Select(operation => operation.Copy()).ToList();
         var existing = State.Operations.FirstOrDefault(operation => operation.Id == item.Id && operation.Date == date);
         if (existing is null) { existing = new PendingOperation { Id = item.Id, Date = date, Version = Book.Version }; State.Operations.Add(existing); }
@@ -99,6 +105,7 @@ public sealed class AgendaStore
     public void Remove(AgendaItem item, bool weeklyPage)
     {
         if (item.Weekly && !weeklyPage) { Save(item, new JsonObject { ["scheduleDate"] = "", ["start"] = "" }); return; }
+        if (item.Semester && !weeklyPage) { Save(item, new JsonObject { ["scheduleDate"] = "" }); return; }
         if (item.Id.StartsWith("local:") && !SyncingIds.Contains(item.Id))
         {
             var original = Snapshot(); State.Operations.RemoveAll(operation => operation.Id == item.Id);
@@ -109,7 +116,7 @@ public sealed class AgendaStore
         if (item.Weekly) fields["deleteScope"] = "weekly";
         Save(item, fields);
     }
-    public void Schedule(AgendaItem item, DateOnly date, string? time)
+    public void Schedule(AgendaItem item, DateOnly date, string? time, double? planned = null)
     {
         if (item.Class || item.Id.StartsWith("semester:")) throw new InvalidOperationException("课程内任务沿用课程时间。");
         if (!item.Weekly && item.Date != AgendaRules.DateText(date)) throw new InvalidOperationException("每日任务只能在当天排期，周任务可安排到所属周的其他日期。");
@@ -118,7 +125,7 @@ public sealed class AgendaStore
         var start = time ?? item.Start;
         if (start.Length > 0)
         {
-            var duration = item.Planned ?? 60; var begin = AgendaRules.Minutes(start); var end = begin + Math.Max(1, duration);
+            var duration = planned ?? item.Planned ?? 60; var begin = AgendaRules.Minutes(start); var end = begin + Math.Max(1, duration);
             var conflict = Day(date).Schedule.Where(candidate => candidate.Id != item.Id).Any(candidate =>
             {
                 var range = candidate.Time.Split('—');

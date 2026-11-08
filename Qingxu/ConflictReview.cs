@@ -24,19 +24,24 @@ public sealed class ConflictReview : Window
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         actions.Children.Add(MainWindow.Button("取消，保留现状", (_, _) => DialogResult = false));
         var choices = new List<(CheckBox Choice, PendingOperation Operation)>();
+        var selection = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
+        selection.Children.Add(MainWindow.Button("全选", (_, _) => { foreach (var pair in choices.Where(pair => pair.Choice.IsEnabled)) pair.Choice.IsChecked = true; }));
+        selection.Children.Add(MainWindow.Button("取消全选", (_, _) => { foreach (var pair in choices.Where(pair => pair.Choice.IsEnabled)) pair.Choice.IsChecked = false; }));
+        DockPanel.SetDock(selection, Dock.Top); root.Children.Add(selection);
         actions.Children.Add(MainWindow.Button("确认选择并继续同步", (_, _) => { foreach (var pair in choices.Where(pair => pair.Choice.IsChecked == true && pair.Choice.IsEnabled)) KeepLocal.Add(pair.Operation.Signature); DialogResult = true; }));
         DockPanel.SetDock(actions, Dock.Bottom); root.Children.Add(actions);
         var list = new StackPanel();
         foreach (var operation in Operations)
         {
             var day = AgendaReader.Read(current, AgendaRules.ParseDate(operation.Date));
-            var item = day.Schedule.Concat(day.Tasks).Concat(day.Weekly).FirstOrDefault(candidate => candidate.Id == operation.Id);
+            var item = day.Schedule.Concat(day.Tasks).Concat(day.Weekly).Concat(day.Semester).FirstOrDefault(candidate => candidate.Id == operation.Id);
             var newItem = operation.Id.StartsWith("local:");
             var title = item?.DisplayTitle;
             if (string.IsNullOrEmpty(title)) title = AgendaRules.Text(operation.Fields, "title");
             if (title.Length == 0) title = item?.Title ?? operation.Id;
             var card = new StackPanel { Margin = new Thickness(0, 4, 8, 16) };
-            card.Children.Add(new TextBlock { Text = operation.Date + " · " + title, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+            var when = operation.Id.StartsWith("semester:", StringComparison.Ordinal) ? "学期计划" : operation.Date;
+            card.Children.Add(new TextBlock { Text = when + " · " + title, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
             var excel = item is null ? newItem ? "尚未创建" : "任务已删除或位置已改变，请保留 Excel 版本。" : Describe(Current(item, operation.Fields));
             card.Children.Add(new TextBlock { Text = "Excel 当前内容\n" + excel + "\n\n小程序待同步内容\n" + Describe(operation.Fields), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 8) });
             var choice = new CheckBox { Content = "采用这项小程序修改", IsChecked = false, IsEnabled = item is not null || newItem, Foreground = MainWindow.Brush("#43765C") };
