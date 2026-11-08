@@ -1,11 +1,13 @@
 import hashlib
 import pathlib
 import shutil
+import sys
 import zipfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-NAME = "Qingxu-Native-v0.1.0"
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "0.2.0"
+NAME = f"Qingxu-Native-v{VERSION}"
 STAGE = ROOT / "dist" / NAME
 SRC_EXE = pathlib.Path(r"D:\Codex\计划！！！！！\outputs\native-win-x64\青序.exe")
 
