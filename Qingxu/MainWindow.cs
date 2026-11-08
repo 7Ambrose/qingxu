@@ -1122,7 +1122,6 @@ public sealed class MainWindow : Window
             .Select(item => (Item: item, Range: Span(item))).OrderBy(pair => pair.Range.Start).ToList();
         var length = (int)Math.Max(15, duration ?? (source.Planned ?? 60));
         start = Math.Clamp(start, 0, Math.Max(0, 24 * 60 - length));
-        var head = "已排 " + AgendaRules.MinuteText(start) + "—" + AgendaRules.MinuteText(start + length);
         var ordered = blocks.Select(pair => pair.Item).ToList();
         var index = ordered.FindIndex(item => Span(item).End > start);
         if (index < 0) index = ordered.Count;
@@ -1152,6 +1151,9 @@ public sealed class MainWindow : Window
             Render();
             return "已排 " + AgendaRules.MinuteText(free) + "—" + AgendaRules.MinuteText(free + length) + "（后面推不动了，改放最近空档）";
         }
+        // 落点撞上课程之类的固定块时会被推开，这里用推完之后的真实时间回话
+        var placed = plan.First(entry => ReferenceEquals(entry.Item, source)).Start;
+        var head = "已排 " + AgendaRules.MinuteText(placed) + "—" + AgendaRules.MinuteText(placed + length);
         var moved = 0;
         for (var position = plan.Count - 1; position >= 0; position--)
         {
