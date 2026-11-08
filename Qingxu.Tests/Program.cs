@@ -65,6 +65,10 @@ internal static class NativeTests
             book = new XlsxBook(path);
             Assert(AgendaReader.Read(book, new DateOnly(2026, 10, 20)).Schedule.Count(item => item.Id == "weekly:秋6周:50") == 1, "Weekly task duplicated");
             Assert(AgendaReader.Read(book, new DateOnly(2026, 10, 20)).Schedule.Single(item => item.Id == "class:10").Title == AgendaReader.Read(original, new DateOnly(2026, 10, 20)).Schedule.Single(item => item.Id == "class:10").Title, "Assignment edit changed the course title");
+            // 老的课内任务可以清空：写入空标题应当把 F 列清掉
+            WorkbookSync.Write(path, book.Version, new[] { Op(book, "class:10", "2026-10-20", new JsonObject { ["title"] = " " }) });
+            book = new XlsxBook(path);
+            Assert(string.IsNullOrEmpty(book.Text("课内安排", "F10")), "Clearing the course task left text in the cell");
             Assert(AgendaReader.Read(book, new DateOnly(2026, 10, 19)).Schedule.Single(item => item.Id == "habit:秋6周:B:67").Detail == "08:30—08:55", "Routine time failed");
             foreach (var overflowRow in new[] { 63, 66 })
             {
@@ -210,7 +214,6 @@ internal static class NativeTests
         var placedBStart = AgendaRules.Minutes(placedBItem.Start);
         Assert(placedBStart >= placedAStart + 60, "Second drop overlapped the first one: " + placedB);
         // 连锁顺延：插到 B 前面时，B 及其后面的任务自动后移
-        window.Cascade = true; window.Render();
         var slotC = new AgendaItem { Id = "local:slot-c", Date = slotDay, Planned = 60 };
         window.Store.Save(slotC, new JsonObject { ["title"] = "排期丙", ["planned"] = 60 });
         window.Render();
@@ -222,7 +225,6 @@ internal static class NativeTests
         Assert(slotCStart == placedBStart && shiftedB == placedBStart + 60, "Cascade did not push the following task: " + cascadeResult);
         Assert(keptA == placedAStart, "Cascade moved a task that came before the drop");
         Assert(cascadeResult.Contains("顺延 1 项", StringComparison.Ordinal), "Cascade result did not report the shift: " + cascadeResult);
-        window.Cascade = false;
         // 时间流：空档里拖到哪一刻就是哪一刻，被占了才往后找空位
         var slotD = new AgendaItem { Id = "local:slot-d", Date = slotDay, Planned = 45 };
         window.Store.Save(slotD, new JsonObject { ["title"] = "精确定位", ["planned"] = 45 });
@@ -236,7 +238,8 @@ internal static class NativeTests
         window.Render();
         var shifted = window.PlaceAt(slotE, today, freeSlot + 10, 30);
         var shiftedItem = window.Store.Day(today).Schedule.Single(item => item.Id == "local:slot-e");
-        Assert(AgendaRules.Minutes(shiftedItem.Start) >= freeSlot + 45 && shifted.Contains("往后挪", StringComparison.Ordinal), "Occupied slot did not move forward: " + shifted);
+        var pushedDown = window.Store.Day(today).Schedule.Single(item => item.Id == "local:slot-d");
+        Assert(AgendaRules.Minutes(shiftedItem.Start) == freeSlot + 10 && AgendaRules.Minutes(pushedDown.Start) == freeSlot + 40 && shifted.Contains("顺延 1 项", StringComparison.Ordinal), "Drop inside a block did not push it: " + shifted);
         // 空档拖放：拖进去才展开刻度，落在哪一刻就是哪一刻
         var gapTask = new AgendaItem { Id = "local:slot-gap", Date = slotDay, Title = "空档落点" };
         window.Store.Save(gapTask, new JsonObject { ["title"] = "空档落点" });
@@ -275,6 +278,12 @@ internal static class NativeTests
         undoAbsorb!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); window.UpdateLayout();
         Assert(window.Store.Day(classDay).Schedule.Single(item => item.Id == classItem!.Id).TaskTitle == classItem!.TaskTitle, "Undo did not restore the course task");
         Assert(window.Store.Day(classDay).Tasks.Any(item => item.Title == "并进课内"), "Undo did not return the task to the todo list");
+        // 老的课内任务可以清空（编辑框留空保存）
+        var clearing = window.Store.Day(classDay).Schedule.Single(item => item.Id == classItem!.Id);
+        window.Store.Save(clearing, new JsonObject { ["title"] = "" });
+        var cleared = window.Store.Day(classDay).Schedule.Single(item => item.Id == classItem!.Id);
+        Assert(cleared.TaskTitle.Length == 0, "Clearing the course task was rejected: " + cleared.TaskTitle);
+        window.Store.Save(clearing, new JsonObject { ["title"] = "并进课内" });
         Descendants<System.Windows.Controls.Button>(window).First(button => button.Content?.ToString() == "今天").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); window.UpdateLayout();
         var inlineUndo = Descendants<System.Windows.Controls.Button>(window).FirstOrDefault(button => button.ToolTip?.ToString() == "撤销时间排期，放回待办");
         Assert(inlineUndo is not null, "Inline unschedule button is missing");

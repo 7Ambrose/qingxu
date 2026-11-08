@@ -134,7 +134,7 @@ public static class AgendaRules
     public static void Validate(AgendaItem item, JsonObject fields)
     {
         CheckDate(item.Date);
-        if (fields.ContainsKey("title") && string.IsNullOrWhiteSpace(Text(fields, "title"))) throw new InvalidOperationException("请填写任务名称。");
+        if (fields.ContainsKey("title") && string.IsNullOrWhiteSpace(Text(fields, "title")) && !item.Class) throw new InvalidOperationException("请填写任务名称。");
         foreach (var name in new[] { "planned", "actual" })
             if (Text(fields, name).Length > 0 && (Number(fields, name) is not double value || !double.IsFinite(value) || value < 0 || value > 1440))
                 throw new InvalidOperationException("分钟须在0—1440之间。");

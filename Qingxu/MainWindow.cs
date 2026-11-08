@@ -23,12 +23,6 @@ namespace Qingxu;
 public sealed class MainWindow : Window
 {
     public AgendaStore Store { get; }
-    /// <summary>连锁顺延：拖进日程后，后面装不下的任务是否依次后推。</summary>
-    public bool Cascade
-    {
-        get => cascade;
-        set { if (cascade == value) return; cascade = value; SaveSettings(); Render(); }
-    }
     private readonly StackPanel content = new();
     private readonly Grid tabs = new();
     private readonly ScrollViewer scroll = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -47,7 +41,6 @@ public sealed class MainWindow : Window
     private readonly System.Windows.Controls.Button syncButton;
     private DateOnly anchor;
     private int page;
-    private bool cascade;
     private Dictionary<string, AbsorbRecord> absorbed = new();
     private (Point Origin, FrameworkElement Host, AgendaItem Item)? rowDrag;
     private (Point Origin, AgendaItem Item)? clickPending;
@@ -63,8 +56,7 @@ public sealed class MainWindow : Window
     public MainWindow(string path, EventWaitHandle? restore = null, int startPage = 0)
     {
         Store = new AgendaStore(path);
-        var settings = ReadSettings();
-        cascade = settings.Cascade; absorbed = settings.Absorbed;
+        absorbed = ReadSettings().Absorbed;
         anchor = AgendaRules.Today;
         page = Math.Max(0, Math.Min(4, startPage));
         if (anchor < AgendaRules.FirstDate || anchor > AgendaRules.LastDate) anchor = AgendaRules.FirstDate;
@@ -302,7 +294,7 @@ public sealed class MainWindow : Window
         {
             // 日程就是一条时间流：固定课程和自己的安排混排，空档压成一条提示，拖动时展开刻度
             var date = AgendaRules.ParseDate(day.Date);
-            Section("日程", CascadeChip());
+            Section("日程");
             var banner = ExamBanner(day);
             if (banner is not null) content.Children.Add(banner);
             var lastEnd = RenderFlow(day, date);
@@ -372,7 +364,6 @@ public sealed class MainWindow : Window
     }
     private sealed class LocalSettings
     {
-        public bool Cascade { get; set; }
         /// <summary>「拖进课内任务」的撤销记录：课程 id → 并进去的标题 + 原来的课内任务。</summary>
         public Dictionary<string, AbsorbRecord> Absorbed { get; set; } = new();
     }
@@ -388,17 +379,8 @@ public sealed class MainWindow : Window
     }
     private void SaveSettings()
     {
-        try { File.WriteAllText(SettingsPath + ".pending", JsonSerializer.Serialize(new LocalSettings { Cascade = cascade, Absorbed = absorbed }, AgendaRules.JsonOptions)); File.Move(SettingsPath + ".pending", SettingsPath, true); }
+        try { File.WriteAllText(SettingsPath + ".pending", JsonSerializer.Serialize(new LocalSettings { Absorbed = absorbed }, AgendaRules.JsonOptions)); File.Move(SettingsPath + ".pending", SettingsPath, true); }
         catch (Exception) { }
-    }
-    private UIElement CascadeChip()
-    {
-        var chip = Button(cascade ? "顺延 开" : "顺延 关", (_, _) => { cascade = !cascade; SaveSettings(); Render(); status.Text = cascade ? "连锁顺延已开：拖进日程后，后面的任务依次后推" : "连锁顺延已关：只挪被拖的那一条"; });
-        chip.FontSize = 10.5; chip.Padding = new Thickness(8, 2, 8, 2);
-        chip.Background = cascade ? Brush("#DDF0E5") : Brush("#F1F6F3");
-        chip.Foreground = cascade ? Brush("#2F4C40") : Brush("#93A99C");
-        chip.ToolTip = "开：拖进日程后，后面排不下的任务自动往后顺延；关：只调整被拖的那一条";
-        return chip;
     }
     /// <summary>从按下的控件往上找它属于哪一条任务；按钮和调整时长的手柄不算拖动的起点。</summary>
     private static (FrameworkElement Host, AgendaItem Item, bool Head)? Hit(DependencyObject source)
@@ -764,7 +746,7 @@ public sealed class MainWindow : Window
         layout.ColumnDefinitions.Add(new ColumnDefinition());
         layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         layout.Children.Add(parts.Head);
-        if (absorbed.ContainsKey(course.Id))
+        if (absorbed.TryGetValue(course.Id, out var record) && record.Entries.Count > 0 && course.TaskTitle.Contains(record.Entries[^1].Title))
         {
             var undo = SmallButton("↺", "撤销并入，把这件任务放回待办");
             undo.Click += (_, _) => UndoAbsorb(course);
@@ -1098,13 +1080,11 @@ public sealed class MainWindow : Window
         var duration = (int)Math.Max(15, source.Planned ?? 60);
         var low = index == 0 ? 7 * 60 : blocks[index - 1].Range.End;
         var high = index >= blocks.Count ? 24 * 60 : blocks[index].Range.Start;
-        int candidate;
-        if (high - low >= duration) candidate = after ? low : high - duration;
-        else if (cascade) candidate = low;                    // 连锁模式：贴在落点上，后面的往后让
-        else candidate = NextGap(blocks, index, duration) ?? throw new InvalidOperationException("这一天剩下的时间排不下它了，先缩短时长或换一天。");
+        // 装得下就贴着落点放，装不下就占住落点、把后面的往后推
+        var candidate = high - low >= duration ? (after ? low : high - duration) : low;
         return PlaceAt(source, date, candidate, duration);
     }
-    /// <summary>按精确时间落位：不连锁就找最近的空位，连锁就把后面的任务往后推。</summary>
+    /// <summary>按精确时间落位：占住这个时刻，后面的任务依次后推；推不下 24:00 就退回最近的空档。</summary>
     public string PlaceAt(AgendaItem source, DateOnly date, int start, int? duration = null)
     {
         if (source.Class || source.Semester) throw new InvalidOperationException("课程和学期任务不用排时间。");
@@ -1115,15 +1095,8 @@ public sealed class MainWindow : Window
         var length = (int)Math.Max(15, duration ?? (source.Planned ?? 60));
         start = Math.Clamp(start, 0, Math.Max(0, 24 * 60 - length));
         var head = "已排 " + AgendaRules.MinuteText(start) + "—" + AgendaRules.MinuteText(start + length);
-        if (!cascade)
-        {
-            var free = FreeStart(blocks, start, length) ?? throw new InvalidOperationException("这一天剩下的时间排不下它了，先缩短时长或换一天。");
-            Store.Schedule(source, date, AgendaRules.MinuteText(free), length);
-            Render();
-            return free == start ? head : "已排 " + AgendaRules.MinuteText(free) + "—" + AgendaRules.MinuteText(free + length) + "（那个位置被占，往后挪到最近空档）";
-        }
         var ordered = blocks.Select(pair => pair.Item).ToList();
-        var index = ordered.FindIndex(item => Span(item).Start >= start);
+        var index = ordered.FindIndex(item => Span(item).End > start);
         if (index < 0) index = ordered.Count;
         ordered.Insert(index, source);
         var plan = new List<(AgendaItem Item, int Start, int Length)>();
@@ -1138,11 +1111,18 @@ public sealed class MainWindow : Window
             if (!pinned)
             {
                 var pushed = PushPastFixed(blocks, begin, ownLength);
-                if (pushed is null || pushed.Value + ownLength > 24 * 60) throw new InvalidOperationException("连锁顺延会把任务推到 24:00 之后，先缩短时长或关掉「顺延」。");
+                if (pushed is null || pushed.Value + ownLength > 24 * 60) { plan.Clear(); break; }
                 begin = pushed.Value;
             }
             plan.Add((item, begin, ownLength));
             cursor = Math.Max(cursor, begin + ownLength);
+        }
+        if (plan.Count == 0)
+        {
+            var free = FreeStart(blocks, start, length) ?? throw new InvalidOperationException("这一天排不下它了，先缩短时长或换一天。");
+            Store.Schedule(source, date, AgendaRules.MinuteText(free), length);
+            Render();
+            return "已排 " + AgendaRules.MinuteText(free) + "—" + AgendaRules.MinuteText(free + length) + "（后面推不动了，改放最近空档）";
         }
         var moved = 0;
         for (var position = plan.Count - 1; position >= 0; position--)
@@ -1186,16 +1166,6 @@ public sealed class MainWindow : Window
         var range = Range(item.Time);
         if (range is not { } value) return (0, 0);
         return value.End > value.Start ? value : (value.Start, value.Start + (int)Math.Max(15, item.Planned ?? 15));
-    }
-    private static int? NextGap(List<(AgendaItem Item, (int Start, int End) Range)> blocks, int index, int duration)
-    {
-        for (var position = index; position <= blocks.Count; position++)
-        {
-            var low = position == 0 ? 7 * 60 : blocks[position - 1].Range.End;
-            var high = position >= blocks.Count ? 24 * 60 : blocks[position].Range.Start;
-            if (high - low >= duration) return low;
-        }
-        return null;
     }
     private static (int Start, int End)? Range(string time)
     {

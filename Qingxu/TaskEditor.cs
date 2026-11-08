@@ -15,7 +15,7 @@ public sealed class TaskEditor : Window
         Width = 360; SizeToContent = SizeToContent.Height; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = MainWindow.Brush("#FCFEFC"); FontFamily = owner.FontFamily;
         var panel = new StackPanel { Margin = new Thickness(20) };
-        var title = Field(panel, "任务名称", item.DisplayTitle);
+        var title = Field(panel, item.Class ? "课内任务（清空可删除）" : "任务名称", item.DisplayTitle);
         TextBox? start = null, end = null, minutes = null, subject = null, actual = null;
         DatePicker? date = null;
         if (!item.Class && !item.Id.StartsWith("semester:"))

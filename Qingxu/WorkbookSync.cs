@@ -116,7 +116,8 @@ public static class WorkbookSync
             }
             return;
         }
-        if (fields.ContainsKey("title") && string.IsNullOrWhiteSpace(AgendaRules.Text(fields, "title"))) throw new InvalidOperationException("请填写任务名称。");
+        // 课程允许清空课内任务，其它类型仍然要求有名字
+        if (fields.ContainsKey("title") && string.IsNullOrWhiteSpace(AgendaRules.Text(fields, "title")) && type != "class") throw new InvalidOperationException("请填写任务名称。");
         foreach (var pair in fields)
         {
             // incomplete 与 done 落在同一个状态列，最终值由两者共同决定，不受字段先后顺序影响
@@ -130,6 +131,7 @@ public static class WorkbookSync
                 case "done":
                     value = AgendaRules.Flag(fields, "incomplete") ? "☒ 未完成" : AgendaRules.Flag(fields, "done") ? "☑ 已完成" : "☐ 待完成"; break;
                 case "highlight": value = AgendaRules.Flag(fields, key) ? "强调" : "普通"; break;
+                case "title": value = string.IsNullOrWhiteSpace(value as string) ? null : value; break;
                 case "start": value = string.IsNullOrEmpty(value as string) ? null : AgendaRules.Minutes((string)value!) / 1440.0; break;
                 case "order":
                     value = AgendaRules.Number(fields, key);
