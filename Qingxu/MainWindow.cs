@@ -50,8 +50,13 @@ public sealed class MainWindow : Window
     private bool followToday = true;
     private readonly DispatcherTimer dayTimer;
     private readonly DispatcherTimer watchTimer;
+    private readonly DispatcherTimer dragScroll = new() { Interval = TimeSpan.FromMilliseconds(45) };
+    private double dragScrollStep;
     private readonly List<(string Id, Action<AgendaItem> Update)> visuals = new();
     private (AgendaItem Item, bool Done, DispatcherTimer Timer)? pendingCheck;
+    /// <summary>时间流的起止：6:00 到 24:00，两端都留空档，早上和晚上都能排。</summary>
+    private const int DayStart = 6 * 60;
+    private const int DayEnd = 24 * 60;
 
     public MainWindow(string path, EventWaitHandle? restore = null, int startPage = 0)
     {
@@ -93,6 +98,12 @@ public sealed class MainWindow : Window
         progressRow.Children.Add(progressBar);
         Grid.SetRow(progressRow, 2); root.Children.Add(progressRow);
         scroll.Content = content; Grid.SetRow(scroll, 3); root.Children.Add(scroll);
+        // 拖到上下边缘自动滚动：日程长了也能一路拖到晚上
+        scroll.AddHandler(DragDrop.DragEnterEvent, new DragEventHandler(TrackDragScroll), true);
+        scroll.AddHandler(DragDrop.DragOverEvent, new DragEventHandler(TrackDragScroll), true);
+        scroll.AddHandler(DragDrop.DropEvent, new DragEventHandler((_, _) => StopDragScroll()), true);
+        AddHandler(DragDrop.QueryContinueDragEvent, new QueryContinueDragEventHandler((_, eventArgs) => { if (eventArgs.Action != DragAction.Continue) StopDragScroll(); }), true);
+        dragScroll.Tick += (_, _) => StepDragScroll();
         var footer = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
         var quickShell = new Border { Background = Brush("#FBFDFB"), BorderBrush = Brush("#DCE9E1"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(1) };
         var quickGrid = new Grid();
@@ -297,8 +308,7 @@ public sealed class MainWindow : Window
             Section("日程");
             var banner = ExamBanner(day);
             if (banner is not null) content.Children.Add(banner);
-            var lastEnd = RenderFlow(day, date);
-            if (lastEnd > 0) content.Children.Add(ScheduleTail(date, lastEnd));
+            RenderFlow(day, date);
             Section("待办", AutoPlanChip());
             foreach (var item in day.Tasks) content.Children.Add(Card(item, false));
         }
@@ -447,7 +457,7 @@ public sealed class MainWindow : Window
             if (eventArgs.LeftButton != MouseButtonState.Pressed || start is not Point point) return;
             var position = eventArgs.GetPosition(handle);
             if (Math.Abs(position.X - point.X) < SystemParameters.MinimumHorizontalDragDistance && Math.Abs(position.Y - point.Y) < SystemParameters.MinimumVerticalDragDistance) return;
-            start = null; DragDrop.DoDragDrop(handle, new DataObject("QingxuTask", item), DragDropEffects.Move);
+            start = null; DragDrop.DoDragDrop(handle, new DataObject("QingxuTask", item), DragDropEffects.Move); StopDragScroll();
         };
         grid.Children.Add(handle);
         var text = new StackPanel();
@@ -482,11 +492,11 @@ public sealed class MainWindow : Window
         border.Drop += (_, eventArgs) => Run(() =>
         {
             if (eventArgs.Data.GetData("QingxuTask") is not AgendaItem source || source.Id == item.Id) return;
-            // 从日程拖回待办 = 取消时间，交给用户重新排
+            // 已经排好时间的任务拖到待办区，不再直接抹掉时间：往晚上拖时很容易手滑越过最后一条
             if (!weekly && source.Start.Length > 0 && item.Start.Length == 0)
             {
-                Store.Save(source, new JsonObject { ["start"] = "", ["planned"] = "" });
-                eventArgs.Handled = true; Render(); status.Text = "已取消「" + source.DisplayTitle + "」的时间，回到待办"; return;
+                eventArgs.Handled = true;
+                status.Text = "要取消「" + source.DisplayTitle + "」的时间，点它右侧的 ↺"; return;
             }
             if (weekly && (source.Weekly != item.Weekly || source.Semester != item.Semester) || !weekly && source.Date != item.Date || !weekly && source.Start.Length > 0 || !weekly && item.Start.Length > 0) throw new InvalidOperationException("请在同一个清单内排序，有时间的任务请直接拖进上面的日程。");
             var day = Store.Day(weekly ? anchor : SelectedDate);
@@ -618,22 +628,24 @@ public sealed class MainWindow : Window
             .OrderBy(pair => pair.Span.Start).ThenBy(pair => pair.Item.Class ? 0 : 1).ToList();
         if (entries.Count == 0)
         {
-            var blank = GhostDrop("放到这里 · 落点就是开始时间", 10, 42, (source, args) =>
-            {
-                status.Text = PlaceAt(source, date, 8 * 60, (int)Math.Max(15, source.Planned ?? 60));
-                _ = AutoSyncAfterSchedule();
-            });
-            blank.Margin = new Thickness(52, 2, 0, 2);
-            content.Children.Add(blank);
+            // 整天没有安排：只留「日程」标题，拖进来时展开成整天的刻度
+            AddGap(DayStart, DayEnd, date, quiet: true);
             return 0;
         }
         var cursor = -1;
         foreach (var entry in entries)
         {
-            if (cursor >= 0 && entry.Span.Start > cursor) AddGap(cursor, entry.Span.Start, date);
+            if (cursor < 0)
+            {
+                // 第一条之前也要能排：早上 6 点到第一件事之间是一条刻度带
+                if (entry.Span.Start - DayStart >= 20) AddGap(DayStart, entry.Span.Start, date);
+            }
+            else if (entry.Span.Start > cursor) AddGap(cursor, entry.Span.Start, date);
             AddFlowRow(entry.Item, entry.Span, date);
-            cursor = Math.Max(cursor, entry.Span.End);
+            cursor = cursor < 0 ? entry.Span.End : Math.Max(cursor, entry.Span.End);
         }
+        // 最后一条之后一直到 24:00 同样是刻度带：晚上想排几点就拖到几点
+        if (DayEnd - cursor >= 20) AddGap(cursor, DayEnd, date, last: true);
         // 没有时间（或时间格空着）的课程/事项也要留一行，避免直接从界面上消失
         foreach (var item in day.Schedule.Where(item => Range(item.Time) is null && item.Title.Length > 0))
             content.Children.Add(new TextBlock { Text = (item.Class ? item.Title : item.DisplayTitle) + " · 时间待定", FontSize = 11, Foreground = Brush("#A9BDB2"), Margin = new Thickness(54, 2, 0, 2), TextWrapping = TextWrapping.Wrap });
@@ -777,6 +789,26 @@ public sealed class MainWindow : Window
         };
         return strip;
     }
+    /// <summary>拖动时贴近滚动区上下边缘就自动滚动，长日程也能一路拖到晚上。</summary>
+    private void TrackDragScroll(object sender, DragEventArgs eventArgs)
+    {
+        if (!eventArgs.Data.GetDataPresent("QingxuTask")) { StopDragScroll(); return; }
+        var y = eventArgs.GetPosition(scroll).Y;
+        var height = scroll.ActualHeight;
+        const double edge = 54;
+        dragScrollStep = y < edge ? -Math.Min(18, (edge - y) * 0.4)
+            : y > height - edge ? Math.Min(18, (y - (height - edge)) * 0.4)
+            : 0;
+        if (Math.Abs(dragScrollStep) < 1) { dragScroll.Stop(); return; }
+        if (!dragScroll.IsEnabled) dragScroll.Start();
+    }
+    private void StepDragScroll()
+    {
+        var next = Math.Clamp(scroll.VerticalOffset + dragScrollStep, 0, scroll.ScrollableHeight);
+        if (Math.Abs(next - scroll.VerticalOffset) < 0.5) return;
+        scroll.ScrollToVerticalOffset(next);
+    }
+    private void StopDragScroll() { dragScroll.Stop(); dragScrollStep = 0; }
     /// <summary>平时不占版面的投放区：拖任务进来才展开并显示一行提示。</summary>
     private Border GhostDrop(string hint, double collapsed, double expanded, Action<AgendaItem, DragEventArgs> drop)
     {
@@ -807,14 +839,16 @@ public sealed class MainWindow : Window
         return button;
     }
     /// <summary>空档：平时只是一行「空 2 小时」，拖任务进来时才展开成时间刻度和落点线。</summary>
-    private void AddGap(int from, int to, DateOnly date)
+    private void AddGap(int from, int to, DateOnly date, bool quiet = false, bool last = false)
     {
         var minutes = to - from;
         if (minutes < 5) { content.Children.Add(new Border { Height = 2 }); return; }
-        var collapsed = minutes < 20 ? 9d : 16d;
-        var hint = new TextBlock { Text = minutes < 20 ? "·" : "空 " + AgendaRules.Human(minutes), FontSize = 10, Foreground = Brush("#C2D2C8"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
-        var host = new Border { Height = collapsed, Child = hint, CornerRadius = new CornerRadius(8), Background = Brushes.Transparent, AllowDrop = true, ToolTip = "把任务拖到这里，按刻度选开始时间" };
-        var expanded = Math.Clamp(minutes * 0.55, 52, 280);
+        // 结尾那条稍微厚一点，往晚上拖时更容易命中
+        var collapsed = quiet ? 8d : last ? 24d : minutes < 20 ? 9d : 16d;
+        var hint = new TextBlock { Text = quiet ? "" : minutes < 20 ? "·" : "空 " + AgendaRules.Human(minutes), FontSize = 10, Foreground = Brush("#C2D2C8"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+        var host = new Border { Height = collapsed, Child = hint, CornerRadius = new CornerRadius(8), Background = Brushes.Transparent, AllowDrop = true, ToolTip = "把任务拖到这里，按刻度选开始时间", Tag = "gap:" + from + "-" + to };
+        // 长空档按比例展开（每 10 分钟约 7.5 像素），并封顶，保证一分钟能落到像素级
+        var expanded = Math.Clamp(minutes * 0.75, 60, 340);
         Grid? ruler = null; Border? marker = null; TextBlock? badge = null;
         void Collapse() { host.Height = collapsed; host.Child = hint; host.Background = Brushes.Transparent; }
         host.DragEnter += (_, eventArgs) =>
@@ -824,13 +858,19 @@ public sealed class MainWindow : Window
             host.Height = expanded; host.Child = ruler; host.Background = Brush("#F7FBF8");
         };
         host.DragLeave += (_, _) => Collapse();
+        // 落点换算成具体时刻：任务长到放不进今天时，预演就提前收，保证看到的时间就是排上的时间
+        int Pick(AgendaItem? source, double y)
+        {
+            var length = (int)Math.Max(15, source?.Planned ?? Math.Clamp(minutes, 15, 60));
+            return Math.Clamp(MinuteAt(y, expanded, from, to), from, Math.Max(from, DayEnd - length));
+        }
         host.DragOver += (_, eventArgs) =>
         {
             if (!eventArgs.Data.GetDataPresent("QingxuTask")) { eventArgs.Effects = DragDropEffects.None; eventArgs.Handled = true; return; }
             eventArgs.Effects = DragDropEffects.Move; eventArgs.Handled = true;
-            var y = eventArgs.GetPosition(host).Y;
-            var minute = MinuteAt(y, expanded, from, to);
-            if (marker is not null) marker.Margin = new Thickness(0, Math.Clamp(y - 1, 0, expanded - 2), 0, 0);
+            var minute = Pick(eventArgs.Data.GetData("QingxuTask") as AgendaItem, eventArgs.GetPosition(host).Y);
+            var y = Math.Clamp((minute - from) * expanded / Math.Max(1, to - from), 0, expanded - 2);
+            if (marker is not null) marker.Margin = new Thickness(0, y, 0, 0);
             if (badge is not null) { badge.Text = AgendaRules.MinuteText(minute); badge.Margin = new Thickness(7, Math.Clamp(y - 19, 0, expanded - 18), 0, 0); }
         };
         host.Drop += (_, eventArgs) =>
@@ -839,7 +879,7 @@ public sealed class MainWindow : Window
             try
             {
                 if (eventArgs.Data.GetData("QingxuTask") is not AgendaItem source) return;
-                var minute = MinuteAt(eventArgs.GetPosition(host).Y, expanded, from, to);
+                var minute = Pick(source, eventArgs.GetPosition(host).Y);
                 var length = (int)Math.Max(15, source.Planned ?? Math.Clamp(minutes, 15, 60));
                 status.Text = PlaceAt(source, date, minute, length);
                 Collapse();
@@ -910,19 +950,6 @@ public sealed class MainWindow : Window
         for (var index = 1; index < entries.Count; index++) gaps += Math.Max(0, entries[index].Span.Start - entries[index - 1].Span.End);
         var packed = scheduled >= 600;
         return new TextBlock { Text = "已排 " + AgendaRules.Human(scheduled) + " · 空档 " + AgendaRules.Human(gaps) + (packed ? " · 今天排得挺满" : ""), FontSize = 10.5, Foreground = Brush(packed ? "#B4482F" : "#9DB3A6"), Margin = new Thickness(2, 7, 0, 2) };
-    }
-    private Border ScheduleTail(DateOnly date, int lastEnd)
-    {
-        var full = lastEnd >= 24 * 60;
-        var hint = full ? "放到这里 · 排进今天最早的空档" : "放到最后 · " + AgendaRules.MinuteText(lastEnd) + " 之后";
-        var host = GhostDrop(hint, 12, 38, (source, args) =>
-        {
-            var length = (int)Math.Max(15, source.Planned ?? 60);
-            status.Text = PlaceAt(source, date, full ? 8 * 60 : lastEnd, length);
-            _ = AutoSyncAfterSchedule();
-        });
-        host.Margin = new Thickness(52, 2, 0, 2);
-        return host;
     }
     /// <summary>日程条目当拖放目标：上半插到它前面，下半插到它后面，具体时间由 PlaceInDay 算。</summary>
     private void AttachFlowDrop(Border shell, AgendaItem target, DateOnly date)

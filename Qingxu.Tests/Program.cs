@@ -258,6 +258,37 @@ internal static class NativeTests
         var drop = DragEvent(payload, gapHost, new Point(90, gapHeight - 4)); drop.RoutedEvent = DragDrop.DropEvent; gapHost.RaiseEvent(drop);
         var gapPlaced = window.Store.Day(today).Schedule.SingleOrDefault(item => item.Id == gapTask.Id);
         Assert(gapPlaced is not null && gapPlaced.Start.Length == 5, "Gap drop did not assign a start time");
+        // 首尾也是刻度带：早上第一位之前、晚上最后一条之后都能落到具体时刻，不是只能「排到最后」
+        var leading = Descendants<Border>(window).Any(border => (border.Tag as string)?.StartsWith("gap:360-") == true);
+        Assert(leading, "Morning drop band before the first entry is missing");
+        var beforeEvening = window.Store.Day(today).Schedule.ToDictionary(item => item.Id, item => item.Start);
+        var evening = Descendants<Border>(window).LastOrDefault(border => (border.Tag as string)?.EndsWith("-" + 24 * 60) == true);
+        Assert(evening is not null, "Evening drop band after the last entry is missing");
+        var eveningEnter = DragEvent(new DataObject("QingxuTask", window.Store.Day(today).Schedule.Single(item => item.Id == gapTask.Id)), evening!, new Point(90, 0));
+        eveningEnter.RoutedEvent = DragDrop.DragEnterEvent; evening!.RaiseEvent(eveningEnter); window.UpdateLayout();
+        var eveningHeight = evening.ActualHeight;
+        Assert(eveningHeight >= 60, "Evening band did not expand while dragging: " + eveningHeight);
+        var eveningOver = DragEvent(new DataObject("QingxuTask", window.Store.Day(today).Schedule.Single(item => item.Id == gapTask.Id)), evening!, new Point(90, eveningHeight - 24));
+        eveningOver.RoutedEvent = DragDrop.DragOverEvent; evening.RaiseEvent(eveningOver);
+        evening.BringIntoView(); window.UpdateLayout();
+        var eveningBitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32); eveningBitmap.Render(window);
+        var eveningEncoder = new PngBitmapEncoder(); eveningEncoder.Frames.Add(BitmapFrame.Create(eveningBitmap)); using (var eveningImage = File.Create(Path.Combine(fixture, "evening-drop.png"))) eveningEncoder.Save(eveningImage);
+        var eveningDrop = DragEvent(new DataObject("QingxuTask", window.Store.Day(today).Schedule.Single(item => item.Id == gapTask.Id)), evening!, new Point(90, eveningHeight - 3));
+        eveningDrop.RoutedEvent = DragDrop.DropEvent; evening!.RaiseEvent(eveningDrop);
+        var late = window.Store.Day(today).Schedule.Single(item => item.Id == gapTask.Id);
+        var lateStart = AgendaRules.Minutes(late.Start);
+        Assert(lateStart >= 21 * 60, "Evening drop did not land late in the day: " + late.Time);
+        Assert(window.Store.Day(today).Schedule.Count(item => item.Id != gapTask.Id && beforeEvening.TryGetValue(item.Id, out var was) && was != item.Start) == 0, "Evening drop moved unrelated entries");
+        // 往晚上拖手滑越到待办区，不能把时间抹掉
+        var todoTarget = window.Store.Day(today).Tasks.FirstOrDefault();
+        var todoCard = todoTarget is null ? null : Descendants<Border>(window).FirstOrDefault(border => border.Tag is AgendaItem tagged && tagged.Id == todoTarget.Id);
+        if (todoTarget is not null && todoCard is not null)
+        {
+            var keep = window.Store.Day(today).Schedule.Single(item => item.Id == gapTask.Id);
+            var slip = DragEvent(new DataObject("QingxuTask", keep), todoCard, new Point(12, 6));
+            slip.RoutedEvent = DragDrop.DropEvent; todoCard.RaiseEvent(slip);
+            Assert(window.Store.Day(today).Schedule.Any(item => item.Id == keep.Id && item.Start == keep.Start), "Dropping on the todo list cleared the scheduled time");
+        }
         // 考试判定与提前提醒
         Assert(AgendaRules.IsExam("期中", "随便") && AgendaRules.IsExam("", "工训机考+报告") && !AgendaRules.IsExam("", "概统小测复习") && !AgendaRules.IsExam("志愿", "队长拿衣服"), "Exam detection misfired");
         Assert(AgendaReader.Read(new XlsxBook(path), new DateOnly(2026, 11, 14)).Schedule.Any(item => item.Exam && item.Category == "期中"), "Exam block is not flagged in the agenda");
