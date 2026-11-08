@@ -1017,7 +1017,8 @@ public sealed class MainWindow : Window
     {
         if (source.Class || source.Id.Length == 0) throw new InvalidOperationException("这一条不能放进课内任务。");
         if (source.Id == course.Id) return status.Text;
-        if (!absorbed.TryGetValue(course.Id, out var record)) { record = new AbsorbRecord { Previous = course.TaskTitle }; absorbed[course.Id] = record; }
+        // 课内任务已被清空时，旧的并入记录作废，从当前内容重新开始记
+        if (!absorbed.TryGetValue(course.Id, out var record) || course.TaskTitle.Length == 0) { record = new AbsorbRecord { Previous = course.TaskTitle }; absorbed[course.Id] = record; }
         record.Entries.Add(new AbsorbEntry { Title = source.DisplayTitle, Id = source.Id });
         Store.Save(course, new JsonObject { ["title"] = MergedTitle(record) });
         SaveSettings();
